@@ -1,0 +1,132 @@
+---
+title: "Human Activity Recognition Prediction"
+author: "SDMitchell"
+date: "October 22, 2015"
+output: html_document
+---
+  
+```{r initial Variables, echo=FALSE}
+randomSeed <- 13
+set.seed(randomSeed)
+
+machineLearningBaseURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn"
+```
+
+```{r Libraries, warning=FALSE, error=FALSE, message=FALSE, echo=FALSE}
+library(knitr)
+library(ggplot2)
+library(tools)
+
+#options(digits=4, scipen=0)
+```
+  
+```{r Data Acquisition, echo=FALSE}
+acquireData <- function(dataSetName) {
+	# Try to download the given file if our input file does not already exist
+	cacheFilename <- paste(dataSetName, "rds", sep=".")
+	rawDataFilename <- paste(dataSetName, "csv", sep=".")
+	if(!file.exists(cacheFilename))
+	{
+		# If the input data file doesn't exist yet, we need to download it
+		if(!file.exists(rawDataFilename))
+		{
+			targetURL <- paste(machineLearningBaseURL, rawDataFilename, sep="/")
+			download.file(url=targetURL, destfile=rawDataFilename, method="auto", mode="wb")
+		}
+	
+		if(file.exists(rawDataFilename))
+		{
+			# Record the downloaded file's MD5 sum; this file's creation date can serve as the downloaded date
+			write(md5sum(rawDataFilename), paste(rawDataFilename, ".MD5", sep=""))
+		}
+		else
+		{
+			stop("There was a problem attempting to download the file from the given URL")
+		}
+		# We either have the raw data file or it was already on disk. So here we are going to create an abbreviated data set
+		# with just the features we want (no response, no new_window, no summary columns).
+		dataRaw <- read.csv(rawDataFilename, header=TRUE, sep=",", stringsAsFactors=FALSE, na.strings="NA")
+		dataSelection <- dataRaw[dataRaw$new_window == "no", grep("^var_|^avg|^max|^min|^amplitude|^stddev|^kurtosis|^skewness|classe|new_window", colnames(dataRaw), invert=TRUE)]
+		saveRDS(dataSelection, cacheFilename)
+	}
+	else
+	{
+		dataSelection <- readRDS(cacheFilename)
+	}
+
+	dataSelection
+}
+```
+
+## Synopsis
+We are performing an analysis of Human Activity data collected while participants were exercising both correctly and incorrectly. Using the data collected, we are attempting to predict if the subjects were indeed performing the activities correctly.
+
+## Exploration
+The data comes pre-divided into training and test sets, but since the training set is large enough, we are going to further divide the training data into a training and calibration set and leave the test set untouched until the final evaluation.
+  
+Simply looking at the training data, we can see that there are rows of summary statistics that look like samples but are in actuality completely dependant upon other samples. They seem to have been denoted by setting the *new_window* feature to the value "yes" so we can safely leave out these rows plus the *new_window* feature.
+  
+The summary statistics are also captured in their own set of features which we can safely ignore; they seem to be any feature starting with any of the following prefixes:
+  
+*"max_"*  
+*"min_"*  
+*"amplitude_"*  
+*"var_"*  
+*"stddev_"*  
+*"kurtosis_"*  
+*"skewness_"*  
+  
+The *classe* column denotes the value we are actually trying to predict, so we'll be using it in our models as the response. It seems to consist of a single capital letter in the range of A through E.
+  
+It would appear that all other features are potentially usable after this cursory exploration.
+  
+***
+  
+## Data Preparation
+To save a bit of time, we are going to construct our test set and save it into an R session with only the relevant samples and features.
+```{r Data Preparation}
+
+```
+  
+***
+  
+## Appendix A - About the Analysis
+  
+### Metadata
+File Characteristic | Value
+----------------- | -------
+File Name | pml-training.csv
+URL | [https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)
+File Size | 12,202,745 bytes
+Compression | None
+MD5 | 56926c78af383dcdc2060407942e52e9
+ | 
+File Name | pml-testing.csv
+URL | [https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)
+File Size | 15,113 bytes
+Compression | None
+MD5 | bc4174f3ec5dfcc5c570a1d2709272d9
+
+### Environment
+**System Information**
+```{r}
+sysinf <- Sys.info()
+```
+Parameter | Value
+-------- | --------
+Operating System | `r paste(sysinf["sysname"], sysinf["release"], sep="")`
+version | `r sysinf["version"]`
+machine arch | `r sysinf["machine"]`
+
+**Session Information**
+```{r}
+sessionInfo()
+```
+  
+## References
+* [Human Activity Recognition](http://groupware.les.inf.puc-rio.br/har) - The original study where the data was collected
+* [R Graphics Cookbook](http://shop.oreilly.com/product/0636920023135.do) - Winston Chang
+* [An Introduction to Statistical Learning](http://www-bcf.usc.edu/~gareth/ISL/) - Gareth James, et al
+* [Applied Predictive Modeling](http://appliedpredictivemodeling.com/) - Max Kuhn, Kjell Johnson
+
+  
