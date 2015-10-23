@@ -131,5 +131,6 @@ sessionInfo()
 * [R Graphics Cookbook](http://shop.oreilly.com/product/0636920023135.do) - Winston Chang
 * [An Introduction to Statistical Learning](http://www-bcf.usc.edu/~gareth/ISL/) - Gareth James, et al
 * [Applied Predictive Modeling](http://appliedpredictivemodeling.com/) - Max Kuhn, Kjell Johnson
+* [Practical Data Science With R](https://www.manning.com/books/practical-data-science-with-r) - Nina Zumel, John Mount
 
   
