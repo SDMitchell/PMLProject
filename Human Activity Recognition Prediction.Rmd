@@ -83,9 +83,12 @@ It would appear that all other features are potentially usable after this cursor
 ***
   
 ## Data Preparation
-To save a bit of time, we are going to construct our test set and save it into an R session with only the relevant samples and features.
+To save a bit of time, we are going to construct our test set and save it into an R session with only the relevant samples and features. We also want to divide this set up into training and calibration sets; note that we set the random number generation seed at the beginning of the report).
 ```{r Data Preparation}
-
+trainingdata <- acquireData("pml-training")
+trainingdata$calibration <- runif(1:nrow(trainingdata)) > 0.70
+realTrainingData <- trainingdata[!trainingdata$calibration,]
+realCalibrationData <- trainingdata[trainingdata$calibration,]
 ```
   
 ***
