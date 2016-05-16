@@ -1,7 +1,7 @@
 ---
 title: "Human Activity Recognition Prediction"
 author: "SDMitchell"
-date: "October 22, 2015"
+date: "May 16, 2016"
 output: html_document
 ---
   
@@ -16,7 +16,9 @@ machineLearningBaseURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn"
 library(knitr)
 library(ggplot2)
 library(tools)
-
+library(caret)
+library(AppliedPredictiveModeling)
+library(e1071)
 #options(digits=4, scipen=0)
 ```
   
@@ -46,7 +48,9 @@ acquireData <- function(dataSetName) {
 		# We either have the raw data file or it was already on disk. So here we are going to create an abbreviated data set
 		# with just the features we want (no response, no new_window, no summary columns).
 		dataRaw <- read.csv(rawDataFilename, header=TRUE, sep=",", stringsAsFactors=FALSE, na.strings="NA")
-		dataSelection <- dataRaw[dataRaw$new_window == "no", grep("^var_|^avg|^max|^min|^amplitude|^stddev|^kurtosis|^skewness|classe|new_window", colnames(dataRaw), invert=TRUE)]
+		dataSelection <- dataRaw[dataRaw$new_window == "no", grep("^var_|^avg|^max|^min|^amplitude|^stddev|^kurtosis|^skewness|new_window|num_window|.*?_timestamp|X|user_name|problem_id", colnames(dataRaw), invert=TRUE)]
+		if("classe" %in% colnames(dataSelection))
+			dataSelection$classe <- as.factor(dataSelection$classe)
 		saveRDS(dataSelection, cacheFilename)
 	}
 	else
@@ -66,7 +70,7 @@ The data comes pre-divided into training and test sets, but since the training s
   
 Simply looking at the training data, we can see that there are rows of summary statistics that look like samples but are in actuality completely dependant upon other samples. They seem to have been denoted by setting the *new_window* feature to the value "yes" so we can safely leave out these rows plus the *new_window* feature.
   
-The summary statistics are also captured in their own set of features which we can safely ignore; they seem to be any feature starting with any of the following prefixes:
+The summary statistics are also captured in their own set of features which we can safely ignore; they seem to be any feature starting with any of the following prefixes as well as anything to do with user name, trial or timestamps:
   
 *"max_"*  
 *"min_"*  
@@ -87,10 +91,29 @@ To save a bit of time, we are going to construct our test set and save it into a
 ```{r Data Preparation}
 trainingdata <- acquireData("pml-training")
 trainingdata$calibration <- runif(1:nrow(trainingdata)) > 0.70
-realTrainingData <- trainingdata[!trainingdata$calibration,]
-realCalibrationData <- trainingdata[trainingdata$calibration,]
+realTrainingData <- subset(trainingdata[!trainingdata$calibration,], select=-c(calibration))
+realCalibrationData <- subset(trainingdata[trainingdata$calibration,], select=-c(calibration))
+realTestingData <- acquireData("pml-testing")
 ```
   
+  
+  Investigate by counting (make sure there are no unique/rare occurences
+  
+  Clustering for investigation? Makes a nice plot
+  
+  Support vector machine
+```{r stuff}
+svmClasse <- svm(classe~., data=realTrainingData)
+predSVM <- predict(svmClasse, realCalibrationData)
+table(predSVM)
+count(realCalibrationData$classe == predSVM)
+predict(svmClasse, realTestingData)
+```
+
+	Do again with cross=10? Then we can talk about cross validation
+	
+	
+	
 ***
   
 ## Appendix A - About the Analysis
@@ -130,6 +153,7 @@ sessionInfo()
 * [Human Activity Recognition](http://groupware.les.inf.puc-rio.br/har) - The original study where the data was collected
 * [R Graphics Cookbook](http://shop.oreilly.com/product/0636920023135.do) - Winston Chang
 * [An Introduction to Statistical Learning](http://www-bcf.usc.edu/~gareth/ISL/) - Gareth James, et al
+* [The Elements of Statistical Learning](http://statweb.stanford.edu/~tibs/ElemStatLearn/) - Trevor Hastie, Robert Tibshirani, Jerome Friedman
 * [Applied Predictive Modeling](http://appliedpredictivemodeling.com/) - Max Kuhn, Kjell Johnson
 * [Practical Data Science With R](https://www.manning.com/books/practical-data-science-with-r) - Nina Zumel, John Mount
 
