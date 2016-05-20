@@ -19,6 +19,9 @@ library(tools)
 library(caret)
 library(AppliedPredictiveModeling)
 library(e1071)
+library(doParallel)
+library(plyr)
+library(ROCR)
 #options(digits=4, scipen=0)
 ```
   
@@ -68,9 +71,9 @@ We are performing an analysis of Human Activity data collected while participant
 ## Exploration
 The data comes pre-divided into training and test sets, but since the training set is large enough, we are going to further divide the training data into a training and calibration set and leave the test set untouched until the final evaluation.
   
-Simply looking at the training data, we can see that there are rows of summary statistics that look like samples but are in actuality completely dependant upon other samples. They seem to have been denoted by setting the *new_window* feature to the value "yes" so we can safely leave out these rows plus the *new_window* feature.
+Simply looking at the training data, we can see that there are rows of summary statistics that look like samples but are in actuality completely dependent upon other samples. They seem to have been denoted by setting the *new_window* feature to the value "yes" so we can safely leave out these rows plus the *new_window* feature itself.
   
-The summary statistics are also captured in their own set of features which we can safely ignore; they seem to be any feature starting with any of the following prefixes as well as anything to do with user name, trial or timestamps:
+The summary statistics are also captured in their own set of features which we can safely ignore; they seem to be any feature starting with any of the following prefixes:
   
 *"max_"*  
 *"min_"*  
@@ -82,12 +85,12 @@ The summary statistics are also captured in their own set of features which we c
   
 The *classe* column denotes the value we are actually trying to predict, so we'll be using it in our models as the response. It seems to consist of a single capital letter in the range of A through E.
   
-It would appear that all other features are potentially usable after this cursory exploration.
+Several other statistics are of limited value to prediction algorithms (user name, trial number and timestamps for example) and they are also ignored in the analysis. It would appear that all other features are potentially usable after this cursory exploration.
   
 ***
   
 ## Data Preparation
-To save a bit of time, we are going to construct our test set and save it into an R session with only the relevant samples and features. We also want to divide this set up into training and calibration sets; note that we set the random number generation seed at the beginning of the report).
+To save a bit of time, we are going to construct our test set and save it into an R session with only the relevant samples and features. We also want to divide this set up into training and calibration sets; note that we set the random number generation seed at the beginning of the report.
 ```{r Data Preparation}
 trainingdata <- acquireData("pml-training")
 trainingdata$calibration <- runif(1:nrow(trainingdata)) > 0.70
@@ -95,25 +98,100 @@ realTrainingData <- subset(trainingdata[!trainingdata$calibration,], select=-c(c
 realCalibrationData <- subset(trainingdata[trainingdata$calibration,], select=-c(calibration))
 realTestingData <- acquireData("pml-testing")
 ```
+
+Since we are going to do 10-fold cross validation, we need a way to partition the data. This is simply an easy way; assign each row a random number between 1 and 10, then we can later use the for loop index to select the data.
+```{r Fold generation}
+# Generate a vector to be used for 10-fold cross-validation. It simply consists of nrow(realTrainingData) integers from 1-10
+# that can be used in a simple for loop
+foldNumber <- as.integer(runif(1:nrow(realTrainingData)) * 10) + 1
+
+# We are selecting 1/5 of the data overall and then performing 10-fold CV. This is so that the random forest algo doesn't 
+# take forever to complete and use up all of the system resources
+inSampAccuracy <- replicate(10, 0)
+outSampAccuracy <- replicate(10, 0)
+```
   
   
-  Investigate by counting (make sure there are no unique/rare occurences
+  Investigate by counting (make sure there are no unique/rare occurences)
   
   Clustering for investigation? Makes a nice plot
   
   Support vector machine
+  Used all of the data because it didn't take too much time
+  The cross parameter is just for model parameter optimization/selection, not actual CV
 ```{r stuff}
-svmClasse <- svm(classe~., data=realTrainingData)
-predSVM <- predict(svmClasse, realCalibrationData)
-table(predSVM)
-count(realCalibrationData$classe == predSVM)
-predict(svmClasse, realTestingData)
+#svmClasse <- svm(classe~., data=realTrainingData)
+#predSVM <- predict(svmClasse, realCalibrationData)
+#table(predSVM)
+#count(realCalibrationData$classe == predSVM)
+#predict(svmClasse, realTestingData)
+dataWithFoldingInfo <- cbind(realTrainingData, foldNumber)
+
+for(currentFold in 1:10)
+{
+	print(paste("Starting fold", currentFold))
+	currentFoldTest <- dataWithFoldingInfo[dataWithFoldingInfo$foldNumber==currentFold, ]
+	currentFoldTrain <- dataWithFoldingInfo[dataWithFoldingInfo$foldNumber!=currentFold, ]
+	svmFit <- svm(classe~., data=subset(currentFoldTrain, select=-c(foldNumber)))
+	svmPredTrain <- predict(svmFit, newdata=subset(currentFoldTrain, select=-c(foldNumber)))
+	svmPredTest <- predict(svmFit, newdata=subset(currentFoldTest, select=-c(foldNumber)))
+	inSampAccuracy[currentFold] <- count(currentFoldTrain$classe == svmPredTrain)[[2]][2] / length(svmPredTrain)
+	outSampAccuracy[currentFold] <- count(currentFoldTest$classe == svmPredTest)[[2]][2] / length(svmPredTest)
+}
+mean(unlist(inSampAccuracy))
+mean(unlist(outSampAccuracy))
+
 ```
 
-	Do again with cross=10? Then we can talk about cross validation
-	
-	
-	
+
+1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 
+B  A  B  A  A  E  D  B  A  A  A  C  B  A  E  E  A  B  B  B 
+
+Number 11 is wrong (correct answer is B)
+
+
+Random Forest
+
+
+Trying to run it with all of the data took an hour and generated a very poor model
+Running with 1/10 of the data (randomly selected) generated a very good model and took a lot less time
+```{r morestuff}
+computationCluster <- makeCluster(8)
+registerDoParallel(computationCluster)
+dataWithFoldingInfo <- cbind(realTrainingData, foldNumber)[runif(1:nrow(realTrainingData)) > 0.80,]
+#rfFit <- train(classe ~ ., data=realTrainingData, method="rf", prox=TRUE)
+
+for(currentFold in 1:10)
+{
+	print(paste("Starting fold", currentFold))
+	currentFoldTest <- dataWithFoldingInfo[dataWithFoldingInfo$foldNumber==currentFold, ]
+	currentFoldTrain <- dataWithFoldingInfo[dataWithFoldingInfo$foldNumber!=currentFold, ]
+	rfFit <- train(classe ~ ., data=subset(currentFoldTrain, select=-c(foldNumber)), method="rf", importance=TRUE)
+	rfPredTrain <- predict(rfFit, newdata=subset(currentFoldTrain, select=-c(foldNumber)))
+	rfPredTest <- predict(rfFit, newdata=subset(currentFoldTest, select=-c(foldNumber)))
+	inSampAccuracy[currentFold] <- count(currentFoldTrain$classe == rfPredTrain)[[2]][2] / length(rfPredTrain)
+	outSampAccuracy[currentFold] <- count(currentFoldTest$classe == rfPredTest)[[2]][2] / length(rfPredTest)
+}
+stopCluster(computationCluster)
+
+mean(unlist(inSampAccuracy))
+mean(unlist(outSampAccuracy))
+
+```
+
+
+
+
+```{r morestufftoo}
+data <- as.data.frame(cbind(rownames(rfFit2$finalModel$importance),as.data.frame(importance(rfFit2$finalModel)[,"MeanDecreaseAccuracy"])))
+colnames(data) <- c("Parameters","MeanDecreaseAccuracy")
+data$MeanDecreaseAccuracy <- as.numeric(as.character(data$MeanDecreaseAccuracy))
+(p <- ggplot(data) + geom_point(aes(MeanDecreaseAccuracy,Parameters)))
+```
+
+
+The RF managed to get #11 correct and #8 wrong	
+B A B A A E D D A A B C B A E E A B B B
 ***
   
 ## Appendix A - About the Analysis
