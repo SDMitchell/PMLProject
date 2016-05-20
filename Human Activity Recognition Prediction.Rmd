@@ -1,7 +1,7 @@
 ---
 title: "Human Activity Recognition Prediction"
 author: "SDMitchell"
-date: "May 16, 2016"
+date: "May 20, 2016"
 output: html_document
 ---
   
@@ -9,6 +9,8 @@ output: html_document
 randomSeed <- 13
 set.seed(randomSeed)
 
+numberOfFoldsForKFold <- 10
+quizAnswers <- as.factor(unlist(strsplit("BABAAEDBAABCBAEEABBB", "")))
 machineLearningBaseURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn"
 ```
 
@@ -87,10 +89,11 @@ The *classe* column denotes the value we are actually trying to predict, so we'l
   
 Several other statistics are of limited value to prediction algorithms (user name, trial number and timestamps for example) and they are also ignored in the analysis. It would appear that all other features are potentially usable after this cursory exploration.
   
+With so much data and several features, we are going to investigate two methods for analysing the data: Support Vector Machines (which were used in the fourth quiz) and Random Forest (which were in a quiz and the lectures). The reason for selecting two methods to use is both for extra validation and because of pure curiousity. There is a quiz-based test set upon which both methods will not perform perfectly; there is a personal interest in which predictions were wrong for each set (i.e. would they misclassify the same samples or different ones).
 ***
   
 ## Data Preparation
-To save a bit of time, we are going to construct our test set and save it into an R session with only the relevant samples and features. We also want to divide this set up into training and calibration sets; note that we set the random number generation seed at the beginning of the report.
+To save a bit of time, we are going to construct our test set and save it into an R session with only the relevant samples and features. We also want to divide this set up into training and calibration sets; note that we set the random number generation seed at the beginning of the report in a hidden section. The code for *acquireData* is also in a hidden section and can be seem in the committed code rather than in this report.
 ```{r Data Preparation}
 trainingdata <- acquireData("pml-training")
 trainingdata$calibration <- runif(1:nrow(trainingdata)) > 0.70
@@ -99,35 +102,37 @@ realCalibrationData <- subset(trainingdata[trainingdata$calibration,], select=-c
 realTestingData <- acquireData("pml-testing")
 ```
 
-Since we are going to do 10-fold cross validation, we need a way to partition the data. This is simply an easy way; assign each row a random number between 1 and 10, then we can later use the for loop index to select the data.
+### Generating fold information for cross validation
+Since we are going to do k-fold cross validation, we need a way to partition the data. This is simply an easy way; assign each row a random number between 1 and k, then we can later use the for loop index to select the data.
 ```{r Fold generation}
-# Generate a vector to be used for 10-fold cross-validation. It simply consists of nrow(realTrainingData) integers from 1-10
+# Generate a vector to be used for k-fold cross-validation. It simply consists of nrow(realTrainingData) integers from 1-10
 # that can be used in a simple for loop
-foldNumber <- as.integer(runif(1:nrow(realTrainingData)) * 10) + 1
-
-# We are selecting 1/5 of the data overall and then performing 10-fold CV. This is so that the random forest algo doesn't 
-# take forever to complete and use up all of the system resources
-inSampAccuracy <- replicate(10, 0)
-outSampAccuracy <- replicate(10, 0)
+foldNumber <- as.integer(runif(1:nrow(realTrainingData)) * numberOfFoldsForKFold) + 1
+inSampAccuracy <- replicate(numberOfFoldsForKFold, 0)
+outSampAccuracy <- replicate(numberOfFoldsForKFold, 0)
 ```
+
+## Initial Investigation
+First let us check the counts of the various levels of the outcome to make sure that there isn't any sort of obvious bias (e.g. rare occurences which may not be properly represented when we sub-sample):
+
+```{r Distribution Of Class Values}
+count(realTrainingData$classe)[2]/dim(realTrainingData)[1]*100
+```
+
+Where these counts are percent of the overall total, they all look relatively well balanced.
   
+One interesting observation about the data is that the outcome variable (*classe*) seems to be ordering the entire data set (i.e. all of the "A" values come first, then "B" and so on). This is not a real problem, but it does mean that we cannot be lazy when selecting our folds (they will have to be random and uniformly distributed, not simple slices).
+
+## Analysis
+
+### Support vector machine
+The support vector machine algorithm performs a one-vs-the-rest analysis when it comes to classifying non-binary classifiers. We were able to use all of the training data (instead of a subset) because the algorithm finished in a reasonable amount of time and it seemed to perform better with more samples.
   
-  Investigate by counting (make sure there are no unique/rare occurences)
-  
-  Clustering for investigation? Makes a nice plot
-  
-  Support vector machine
-  Used all of the data because it didn't take too much time
-  The cross parameter is just for model parameter optimization/selection, not actual CV
-```{r stuff}
-#svmClasse <- svm(classe~., data=realTrainingData)
-#predSVM <- predict(svmClasse, realCalibrationData)
-#table(predSVM)
-#count(realCalibrationData$classe == predSVM)
-#predict(svmClasse, realTestingData)
+The *cross* parameter in the SVM algorithm is just for model parameter optimization/selection, not actual cross validation of models, so we has to perform our own cross validation. A comparison of the prediction against the validation data set versus the actual correct response in the validation set was used to calculate our out-of-sample error rate for comparison to the in-sample rate using the training data.
+```{r SVM Model Fitting}
 dataWithFoldingInfo <- cbind(realTrainingData, foldNumber)
 
-for(currentFold in 1:10)
+for(currentFold in 1:numberOfFoldsForKFold)
 {
 	print(paste("Starting fold", currentFold))
 	currentFoldTest <- dataWithFoldingInfo[dataWithFoldingInfo$foldNumber==currentFold, ]
@@ -135,33 +140,34 @@ for(currentFold in 1:10)
 	svmFit <- svm(classe~., data=subset(currentFoldTrain, select=-c(foldNumber)))
 	svmPredTrain <- predict(svmFit, newdata=subset(currentFoldTrain, select=-c(foldNumber)))
 	svmPredTest <- predict(svmFit, newdata=subset(currentFoldTest, select=-c(foldNumber)))
-	inSampAccuracy[currentFold] <- count(currentFoldTrain$classe == svmPredTrain)[[2]][2] / length(svmPredTrain)
-	outSampAccuracy[currentFold] <- count(currentFoldTest$classe == svmPredTest)[[2]][2] / length(svmPredTest)
+	correct <- count(currentFoldTrain$classe == svmPredTrain)
+	inSampAccuracy[currentFold] <- as.numeric(correct[correct$x,][2] / length(svmPredTrain))
+	correct <- count(currentFoldTest$classe == svmPredTest)
+	outSampAccuracy[currentFold] <- as.numeric(correct[correct$x,][2] / length(svmPredTest))
 }
-mean(unlist(inSampAccuracy))
-mean(unlist(outSampAccuracy))
-
+accInSampleSVM <- mean(unlist(inSampAccuracy))
+accOutSampleSVM <- mean(unlist(outSampAccuracy))
+```
+The SVM seems to perform rather well, with a mean out-of-sample success rate of `r accOutSampleSVM`% as compared to the in-sample success rate of `r accInSampleSVM`%.
+  
+For fun, let's take a look at its success rate versus the actual test data; we'll see what it would get if it were used to blindly submit the answers to the quiz:
+```{r SVM vs The Quiz}
+svmFitAll <- svm(classe~., data=realTrainingData)
+svmPredQuiz <- predict(svmFitAll, newdata=realTestingData)
+quizSuccessSVM <- count(quizAnswers == svmPredQuiz)[[2]][2] / length(svmPredQuiz)
 ```
 
+Well, `r as.integer(quizSuccessSVM * 100.0)`% isn't too shabby; certainly much better than guessing!
 
-1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 
-B  A  B  A  A  E  D  B  A  A  A  C  B  A  E  E  A  B  B  B 
+###Random Forest
+Random forest should perform very well given the type of data we have, but it has the disadvantage of wanting to melt your computer if you don't constrain it some way. There was an attempt made to use all of the training data, but it resulted in an hour-long wait and complete usage of 10 of 12 CPU cores and nearly all of 32GB of RAM (and it likely still ended up deep in swap). To make matters worse, the model it produced was not very good. Running with one fifth of the data (randomly selected) generated a very good model and took a lot less time; running k-fold cross validation to get some error rates was much more reasonable with the resouces at hand.
 
-Number 11 is wrong (correct answer is B)
-
-
-Random Forest
-
-
-Trying to run it with all of the data took an hour and generated a very poor model
-Running with 1/10 of the data (randomly selected) generated a very good model and took a lot less time
-```{r morestuff}
+```{r RF Model Fitting}
 computationCluster <- makeCluster(8)
 registerDoParallel(computationCluster)
 dataWithFoldingInfo <- cbind(realTrainingData, foldNumber)[runif(1:nrow(realTrainingData)) > 0.80,]
-#rfFit <- train(classe ~ ., data=realTrainingData, method="rf", prox=TRUE)
 
-for(currentFold in 1:10)
+for(currentFold in 1:numberOfFoldsForKFold)
 {
 	print(paste("Starting fold", currentFold))
 	currentFoldTest <- dataWithFoldingInfo[dataWithFoldingInfo$foldNumber==currentFold, ]
@@ -169,15 +175,34 @@ for(currentFold in 1:10)
 	rfFit <- train(classe ~ ., data=subset(currentFoldTrain, select=-c(foldNumber)), method="rf", importance=TRUE)
 	rfPredTrain <- predict(rfFit, newdata=subset(currentFoldTrain, select=-c(foldNumber)))
 	rfPredTest <- predict(rfFit, newdata=subset(currentFoldTest, select=-c(foldNumber)))
-	inSampAccuracy[currentFold] <- count(currentFoldTrain$classe == rfPredTrain)[[2]][2] / length(rfPredTrain)
-	outSampAccuracy[currentFold] <- count(currentFoldTest$classe == rfPredTest)[[2]][2] / length(rfPredTest)
+	correct <- count(currentFoldTrain$classe == rfPredTrain)
+	inSampAccuracy[currentFold] <- as.numeric(correct[correct$x,][2] / length(rfPredTrain))
+	correct <- count(currentFoldTest$classe == rfPredTest)
+	outSampAccuracy[currentFold] <- as.numeric(correct[correct$x,][2] / length(rfPredTest))
 }
+
 stopCluster(computationCluster)
 
-mean(unlist(inSampAccuracy))
-mean(unlist(outSampAccuracy))
-
+accInSampleRF <- mean(unlist(inSampAccuracy))
+accOutSampleRF <- mean(unlist(outSampAccuracy))
 ```
+The random forest seems to perform better than the SVM, with a mean out-of-sample success rate of `r accOutSampleRF`% as compared to the in-sample success rate of `r accInSampleRF`%.
+  
+For an equal amount of fun as last time, let's take a look at its success rate versus the actual test data; we'll see what it would get if it were used to blindly submit the answers to the quiz:
+```{r RF vs The Quiz}
+computationCluster <- makeCluster(8)
+registerDoParallel(computationCluster)
+
+rfData <- realTrainingData[runif(1:nrow(realTrainingData)) > 0.80,]
+rfFitAll <- train(classe~., data=rfData, method="rf", importance=TRUE)
+rfPredQuiz <- predict(rfFitAll, newdata=realTestingData)
+correct <- count(quizAnswers == rfPredQuiz)
+quizSuccessRF <- as.numeric(correct[correct$x,][2] / length(rfPredQuiz))
+
+stopCluster(computationCluster)
+```
+
+Well, `r as.integer(quizSuccessRF * 100.0)`% is pretty much worth submitting on its own.
 
 
 
