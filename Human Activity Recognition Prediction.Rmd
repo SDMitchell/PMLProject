@@ -24,6 +24,7 @@ library(e1071)
 library(doParallel)
 library(plyr)
 library(ROCR)
+library(cluster)
 #options(digits=4, scipen=0)
 ```
   
@@ -122,19 +123,30 @@ count(realTrainingData$classe)[2]/dim(realTrainingData)[1]*100
 Where these counts are percent of the overall total, they all look relatively well balanced.
   
 One interesting observation about the data is that the outcome variable (*classe*) seems to be ordering the entire data set (i.e. all of the "A" values come first, then "B" and so on). This is not a real problem, but it does mean that we cannot be lazy when selecting our folds (they will have to be random and uniformly distributed, not simple slices).
+  
+### Clustering
+Perhaps the data will fall into convenient clusters using kmeans; it doesn't hurt to check given that it is a relatively cheap process:
+```{r A Quick Clustering, fig.width=12, fig.align='center'}
+trainingScaled <- scale(subset(realTrainingData, select=-classe))
+km <- kmeans(trainingScaled, 5)
+#summary(km)
+clusplot(trainingScaled, km$cluster, color=TRUE, shade=FALSE,labels=4, lines=0, main="PCA Cluster Plot")
+```
 
+Given the PCA components produced, this doesn't look like a winning algorithm. The two main components only explain 30-ish percent of the variability in the data and there is some massive overlap in three of the clusters. This calls for more extensive analysis.
+  
 ## Analysis
 
 ### Support vector machine
 The support vector machine algorithm performs a one-vs-the-rest analysis when it comes to classifying non-binary classifiers. We were able to use all of the training data (instead of a subset) because the algorithm finished in a reasonable amount of time and it seemed to perform better with more samples.
   
 The *cross* parameter in the SVM algorithm is just for model parameter optimization/selection, not actual cross validation of models, so we has to perform our own cross validation. A comparison of the prediction against the validation data set versus the actual correct response in the validation set was used to calculate our out-of-sample error rate for comparison to the in-sample rate using the training data.
-```{r SVM Model Fitting}
+```{r SVM Model Fitting, warning=FALSE, error=FALSE, message=FALSE}
 dataWithFoldingInfo <- cbind(realTrainingData, foldNumber)
 
 for(currentFold in 1:numberOfFoldsForKFold)
 {
-	print(paste("Starting fold", currentFold))
+	#print(paste("Starting fold", currentFold))
 	currentFoldTest <- dataWithFoldingInfo[dataWithFoldingInfo$foldNumber==currentFold, ]
 	currentFoldTrain <- dataWithFoldingInfo[dataWithFoldingInfo$foldNumber!=currentFold, ]
 	svmFit <- svm(classe~., data=subset(currentFoldTrain, select=-c(foldNumber)))
@@ -148,7 +160,7 @@ for(currentFold in 1:numberOfFoldsForKFold)
 accInSampleSVM <- mean(unlist(inSampAccuracy))
 accOutSampleSVM <- mean(unlist(outSampAccuracy))
 ```
-The SVM seems to perform rather well, with a mean out-of-sample success rate of `r accOutSampleSVM`% as compared to the in-sample success rate of `r accInSampleSVM`%.
+The SVM seems to perform rather well, with a mean out-of-sample success rate of `r round(accOutSampleSVM*100.0,2)`% as compared to the in-sample success rate of `r round(accInSampleSVM*100.0,2)`%.
   
 For fun, let's take a look at its success rate versus the actual test data; we'll see what it would get if it were used to blindly submit the answers to the quiz:
 ```{r SVM vs The Quiz}
@@ -160,16 +172,16 @@ quizSuccessSVM <- count(quizAnswers == svmPredQuiz)[[2]][2] / length(svmPredQuiz
 Well, `r as.integer(quizSuccessSVM * 100.0)`% isn't too shabby; certainly much better than guessing!
 
 ###Random Forest
-Random forest should perform very well given the type of data we have, but it has the disadvantage of wanting to melt your computer if you don't constrain it some way. There was an attempt made to use all of the training data, but it resulted in an hour-long wait and complete usage of 10 of 12 CPU cores and nearly all of 32GB of RAM (and it likely still ended up deep in swap). To make matters worse, the model it produced was not very good. Running with one fifth of the data (randomly selected) generated a very good model and took a lot less time; running k-fold cross validation to get some error rates was much more reasonable with the resouces at hand.
+Random forest should perform very well given the type of data we have, but it has the disadvantage of wanting to melt your computer if you don't constrain it in some way. There was an attempt made to use all of the training data, but it resulted in an hour-long wait and complete usage of 10 of 12 CPU cores and nearly all of 32GB of RAM (and it likely still ended up deep in swap). To make matters worse, the model it produced was not very good. Running with one fifth of the data (randomly selected) generated a very good model and took a lot less time; running k-fold cross validation to get some error rates was much more reasonable with the resouces at hand.
 
-```{r RF Model Fitting}
+```{r RF Model Fitting, warning=FALSE, error=FALSE, message=FALSE}
 computationCluster <- makeCluster(8)
 registerDoParallel(computationCluster)
 dataWithFoldingInfo <- cbind(realTrainingData, foldNumber)[runif(1:nrow(realTrainingData)) > 0.80,]
 
 for(currentFold in 1:numberOfFoldsForKFold)
 {
-	print(paste("Starting fold", currentFold))
+	#print(paste("Starting fold", currentFold))
 	currentFoldTest <- dataWithFoldingInfo[dataWithFoldingInfo$foldNumber==currentFold, ]
 	currentFoldTrain <- dataWithFoldingInfo[dataWithFoldingInfo$foldNumber!=currentFold, ]
 	rfFit <- train(classe ~ ., data=subset(currentFoldTrain, select=-c(foldNumber)), method="rf", importance=TRUE)
@@ -186,7 +198,7 @@ stopCluster(computationCluster)
 accInSampleRF <- mean(unlist(inSampAccuracy))
 accOutSampleRF <- mean(unlist(outSampAccuracy))
 ```
-The random forest seems to perform better than the SVM, with a mean out-of-sample success rate of `r accOutSampleRF`% as compared to the in-sample success rate of `r accInSampleRF`%.
+The random forest seems to perform better than the SVM, with a mean out-of-sample success rate of `r round(accOutSampleRF*100.0,2)`% as compared to the in-sample success rate of `r round(accInSampleRF*100.0,2)`%.
   
 For an equal amount of fun as last time, let's take a look at its success rate versus the actual test data; we'll see what it would get if it were used to blindly submit the answers to the quiz:
 ```{r RF vs The Quiz}
@@ -202,21 +214,11 @@ quizSuccessRF <- as.numeric(correct[correct$x,][2] / length(rfPredQuiz))
 stopCluster(computationCluster)
 ```
 
-Well, `r as.integer(quizSuccessRF * 100.0)`% is pretty much worth submitting on its own.
-
-
-
-
-```{r morestufftoo}
-data <- as.data.frame(cbind(rownames(rfFit2$finalModel$importance),as.data.frame(importance(rfFit2$finalModel)[,"MeanDecreaseAccuracy"])))
-colnames(data) <- c("Parameters","MeanDecreaseAccuracy")
-data$MeanDecreaseAccuracy <- as.numeric(as.character(data$MeanDecreaseAccuracy))
-(p <- ggplot(data) + geom_point(aes(MeanDecreaseAccuracy,Parameters)))
-```
-
-
-The RF managed to get #11 correct and #8 wrong	
-B A B A A E D D A A B C B A E E A B B B
+Well, `r as.integer(quizSuccessRF * 100.0)`% is pretty decent as well.
+   
+## Conclusions
+It appears that random forest wins a battle between the two methods for this type of data, although support vector machines certainly gave an admirable result. Random forest required much more resources to do its computations (so much so that *doParallel* was installed to make it somewhat reasonable) and SVM completed much faster. As it turns out, a combination of the two methods helped answer the quiz questions, as an SVM model fit resulted in a 19/20 correct and a random forest fit supplied us with the answer to the question that SVM got incorrect.
+  
 ***
   
 ## Appendix A - About the Analysis
