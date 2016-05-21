@@ -1,75 +1,12 @@
----
-title: "Human Activity Recognition Prediction"
-author: "SDMitchell"
-date: "May 20, 2016"
-output: 
-  html_document: 
-    keep_md: yes
----
+# Human Activity Recognition Prediction
+SDMitchell  
+May 20, 2016  
   
-```{r initial Variables, echo=FALSE}
-randomSeed <- 13
-set.seed(randomSeed)
 
-numberOfFoldsForKFold <- 10
-quizAnswers <- as.factor(unlist(strsplit("BABAAEDBAABCBAEEABBB", "")))
-machineLearningBaseURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn"
-```
 
-```{r Libraries, warning=FALSE, error=FALSE, message=FALSE, echo=FALSE}
-library(knitr)
-library(ggplot2)
-library(tools)
-library(caret)
-library(AppliedPredictiveModeling)
-library(e1071)
-library(doParallel)
-library(plyr)
-library(ROCR)
-library(cluster)
-library(randomForest)
-#options(digits=4, scipen=0)
-```
+
   
-```{r Data Acquisition, echo=FALSE}
-acquireData <- function(dataSetName) {
-	# Try to download the given file if our input file does not already exist
-	cacheFilename <- paste(dataSetName, "rds", sep=".")
-	rawDataFilename <- paste(dataSetName, "csv", sep=".")
-	if(!file.exists(cacheFilename))
-	{
-		# If the input data file doesn't exist yet, we need to download it
-		if(!file.exists(rawDataFilename))
-		{
-			targetURL <- paste(machineLearningBaseURL, rawDataFilename, sep="/")
-			download.file(url=targetURL, destfile=rawDataFilename, method="auto", mode="wb")
-		}
-	
-		if(file.exists(rawDataFilename))
-		{
-			# Record the downloaded file's MD5 sum; this file's creation date can serve as the downloaded date
-			write(md5sum(rawDataFilename), paste(rawDataFilename, ".MD5", sep=""))
-		}
-		else
-		{
-			stop("There was a problem attempting to download the file from the given URL")
-		}
-		# We either have the raw data file or it was already on disk. So here we are going to create an abbreviated data set
-		# with just the features we want (no response, no new_window, no summary columns).
-		dataRaw <- read.csv(rawDataFilename, header=TRUE, sep=",", stringsAsFactors=FALSE, na.strings="NA")
-		dataSelection <- dataRaw[dataRaw$new_window == "no", grep("^var_|^avg|^max|^min|^amplitude|^stddev|^kurtosis|^skewness|new_window|num_window|.*?_timestamp|X|user_name|problem_id", colnames(dataRaw), invert=TRUE)]
-		if("classe" %in% colnames(dataSelection))
-			dataSelection$classe <- as.factor(dataSelection$classe)
-		saveRDS(dataSelection, cacheFilename)
-	}
-	else
-	{
-		dataSelection <- readRDS(cacheFilename)
-	}
 
-	dataSelection
-}
-```
 
 ## Synopsis
 We are performing an analysis of Human Activity data collected while participants were exercising both correctly and incorrectly. Using the data collected, we are attempting to predict if the subjects were indeed performing the activities correctly.
@@ -98,7 +35,8 @@ With so much data and several features, we are going to investigate two methods 
   
 ## Data Preparation
 To save a bit of time, we are going to construct our test set and save it into an R session with only the relevant samples and features. We also want to divide this set up into training and calibration sets; note that we set the random number generation seed at the beginning of the report in a hidden section. The code for *acquireData* is also in a hidden section and can be seen in the committed code rather than in this report.
-```{r Data Preparation}
+
+```r
 trainingdata <- acquireData("pml-training")
 trainingdata$calibration <- runif(1:nrow(trainingdata)) > 0.70
 realTrainingData <- subset(trainingdata[!trainingdata$calibration,], select=-c(calibration))
@@ -108,7 +46,8 @@ realTestingData <- acquireData("pml-testing")
 
 ### Generating fold information for cross validation
 Since we are going to do k-fold cross validation, we need a way to partition the data. This is simply an easy way; assign each row a random number between 1 and k, then we can later use the for loop index to select the test data for that fold.
-```{r Fold generation}
+
+```r
 # Generate a vector to be used for k-fold cross-validation. It simply consists of nrow(realTrainingData) integers from 1-10
 # that can be used in a simple for loop
 foldNumber <- as.integer(runif(1:nrow(realTrainingData)) * numberOfFoldsForKFold) + 1
@@ -119,8 +58,18 @@ outSampAccuracy <- replicate(numberOfFoldsForKFold, 0)
 ## Initial Investigation
 First let us check the counts of the various levels of the outcome to make sure that there isn't any sort of obvious bias (e.g. rare occurences which may not be properly represented when we sub-sample):
 
-```{r Distribution Of Class Values}
+
+```r
 count(realTrainingData$classe)[2]/dim(realTrainingData)[1]*100
+```
+
+```
+##       freq
+## 1 28.55017
+## 2 19.22190
+## 3 17.28037
+## 4 16.62575
+## 5 18.32180
 ```
 
 Where these counts are percent of the overall total, they all look relatively well balanced.
@@ -129,12 +78,15 @@ One interesting observation about the data is that the outcome variable (*classe
   
 ### Clustering
 Perhaps the data will fall into convenient clusters using kmeans; it doesn't hurt to check given that it is a relatively cheap process:
-```{r A Quick Clustering, fig.width=12, fig.align='center'}
+
+```r
 trainingScaled <- scale(subset(realTrainingData, select=-classe))
 km <- kmeans(trainingScaled, 5)
 #summary(km)
 clusplot(trainingScaled, km$cluster, color=TRUE, shade=FALSE,labels=4, lines=0, main="PCA Cluster Plot")
 ```
+
+<img src="Human_Activity_Recognition_Prediction_files/figure-html/A Quick Clustering-1.png" style="display: block; margin: auto;" />
 
 Given the PCA components produced, this doesn't look like a winning algorithm on its own. The two main components only explain 30-ish percent of the variability in the data and there is some massive overlap in three of the clusters. This calls for more extensive analysis.
   
@@ -144,7 +96,8 @@ Given the PCA components produced, this doesn't look like a winning algorithm on
 The support vector machine algorithm performs a one-vs-the-rest analysis when it comes to classifying non-binary classifiers. We were able to use all of the training data (instead of a subset) because the algorithm finished in a reasonable amount of time and it seemed to perform better with more samples.
   
 The *cross* parameter in the SVM algorithm is just for model parameter optimization/selection, not actual cross validation of models, so we have to perform our own cross validation. A comparison of the prediction against the validation data set versus the actual correct response in the validation set was used to calculate our out-of-sample error rate for comparison to the in-sample rate using the training data.
-```{r SVM Model Fitting, warning=FALSE, error=FALSE, message=FALSE}
+
+```r
 dataWithFoldingInfo <- cbind(realTrainingData, foldNumber)
 
 for(currentFold in 1:numberOfFoldsForKFold)
@@ -163,22 +116,24 @@ for(currentFold in 1:numberOfFoldsForKFold)
 accInSampleSVM <- mean(unlist(inSampAccuracy))
 accOutSampleSVM <- mean(unlist(outSampAccuracy))
 ```
-The SVM seems to perform rather well, with a mean out-of-sample success rate of `r round(accOutSampleSVM*100.0,2)`% as compared to the in-sample success rate of `r round(accInSampleSVM*100.0,2)`%.
+The SVM seems to perform rather well, with a mean out-of-sample success rate of 93.64% as compared to the in-sample success rate of 94.43%.
   
 For fun, let's take a look at its success rate versus the actual test data; we'll see what it would get if it were used to blindly submit the answers to the quiz:
-```{r SVM vs The Quiz}
+
+```r
 svmFitAll <- svm(classe~., data=realTrainingData)
 svmPredQuiz <- predict(svmFitAll, newdata=realTestingData)
 correct <- count(quizAnswers == svmPredQuiz)
 quizSuccessSVM <- as.numeric(correct[correct$x,][2] / length(svmPredQuiz))
 ```
 
-Well, `r as.integer(quizSuccessSVM * 100.0)`% isn't too shabby; certainly much better than guessing!
+Well, 90% isn't too shabby; certainly much better than guessing!
 
 ###Random Forest
 Random forest should perform very well given the type of data we have, but it has the disadvantage of wanting to melt your computer if you don't constrain it in some way. There was an attempt made to use all of the training data, but it resulted in an hour-long wait and complete usage of 10 of 12 CPU cores and nearly all of 32GB of RAM (and it likely still ended up deep in swap). To make matters worse, the model it produced was not very good. Running with one fifth of the training set data (randomly selected) generated a very good model and took a lot less time; running k-fold cross validation to get some error rates was much more reasonable with the resouces at hand.
 
-```{r RF Model Fitting, warning=FALSE, error=FALSE, message=FALSE}
+
+```r
 computationCluster <- makeCluster(8)
 registerDoParallel(computationCluster)
 dataWithFoldingInfo <- cbind(realTrainingData, foldNumber)[runif(1:nrow(realTrainingData)) > 0.80,]
@@ -202,10 +157,11 @@ stopCluster(computationCluster)
 accInSampleRF <- mean(unlist(inSampAccuracy))
 accOutSampleRF <- mean(unlist(outSampAccuracy))
 ```
-The random forest seems to perform better than the SVM, with a mean out-of-sample success rate of `r round(accOutSampleRF*100.0,2)`% as compared to the in-sample success rate of `r round(accInSampleRF*100.0,2)`%.
+The random forest seems to perform better than the SVM, with a mean out-of-sample success rate of 95.99% as compared to the in-sample success rate of 100%.
   
 For an equal amount of fun as last time, let's take a look at its success rate versus the actual test data; we'll see what it would get if it were used to blindly submit the answers to the quiz:
-```{r RF vs The Quiz}
+
+```r
 computationCluster <- makeCluster(8)
 registerDoParallel(computationCluster)
 
@@ -218,13 +174,16 @@ quizSuccessRF <- as.numeric(correct[correct$x,][2] / length(rfPredQuiz))
 stopCluster(computationCluster)
 ```
 
-Well, `r as.integer(quizSuccessRF * 100.0)`% is pretty decent here as well.
+Well, 90% is pretty decent here as well.
    
 If this report was not constrained by size and time, the investigation would likely continue exploring using the random forest algorithm. We computed the variable importance during the random forest calculation; it appears that we could likely focus our (future) analysis on a handful of features instead of the entire set:
   
-```{r Variable Importance, fig.width=12, fig.align='center'}
+
+```r
 varImpPlot(rfFitAll$finalModel, main="Random Forest Variable Importance")
 ```
+
+<img src="Human_Activity_Recognition_Prediction_files/figure-html/Variable Importance-1.png" style="display: block; margin: auto;" />
 
 Choosing the top ten features in terms of importance would make for some interesting analysis versus using all of them.
 
@@ -252,18 +211,60 @@ MD5 | bc4174f3ec5dfcc5c570a1d2709272d9
 
 ### Environment
 **System Information**
-```{r}
+
+```r
 sysinf <- Sys.info()
 ```
 Parameter | Value
 -------- | --------
-Operating System | `r paste(sysinf["sysname"], sysinf["release"], sep="")`
-version | `r sysinf["version"]`
-machine arch | `r sysinf["machine"]`
+Operating System | Windows7 x64
+version | build 7601, Service Pack 1
+machine arch | x86-64
 
 **Session Information**
-```{r}
+
+```r
 sessionInfo()
+```
+
+```
+## R version 3.2.2 (2015-08-14)
+## Platform: x86_64-w64-mingw32/x64 (64-bit)
+## Running under: Windows 7 x64 (build 7601) Service Pack 1
+## 
+## locale:
+## [1] LC_COLLATE=English_Canada.1252  LC_CTYPE=English_Canada.1252   
+## [3] LC_MONETARY=English_Canada.1252 LC_NUMERIC=C                   
+## [5] LC_TIME=English_Canada.1252    
+## 
+## attached base packages:
+## [1] parallel  tools     stats     graphics  grDevices utils     datasets 
+## [8] methods   base     
+## 
+## other attached packages:
+##  [1] randomForest_4.6-12             cluster_2.0.3                  
+##  [3] ROCR_1.0-7                      gplots_3.0.1                   
+##  [5] plyr_1.8.3                      doParallel_1.0.10              
+##  [7] iterators_1.0.7                 foreach_1.4.2                  
+##  [9] e1071_1.6-7                     AppliedPredictiveModeling_1.1-6
+## [11] caret_6.0-57                    lattice_0.20-33                
+## [13] ggplot2_2.1.0                   knitr_1.13                     
+## 
+## loaded via a namespace (and not attached):
+##  [1] Rcpp_0.12.2        compiler_3.2.2     formatR_1.2.1     
+##  [4] nloptr_1.0.4       bitops_1.0-6       class_7.3-13      
+##  [7] rpart_4.1-10       digest_0.6.8       lme4_1.1-9        
+## [10] evaluate_0.8       nlme_3.1-121       gtable_0.1.2      
+## [13] mgcv_1.8-7         Matrix_1.2-2       yaml_2.1.13       
+## [16] SparseM_1.7        stringr_1.0.0      caTools_1.17.1    
+## [19] gtools_3.5.0       MatrixModels_0.4-1 stats4_3.2.2      
+## [22] grid_3.2.2         nnet_7.3-10        rmarkdown_0.9.6   
+## [25] gdata_2.17.0       minqa_1.2.4        reshape2_1.4.1    
+## [28] car_2.1-0          magrittr_1.5       scales_0.3.0      
+## [31] codetools_0.2-14   htmltools_0.2.6    MASS_7.3-43       
+## [34] splines_3.2.2      pbkrtest_0.4-2     colorspace_1.2-6  
+## [37] quantreg_5.19      KernSmooth_2.23-15 stringi_1.0-1     
+## [40] munsell_0.4.2      CORElearn_1.47.1
 ```
   
 ## References
