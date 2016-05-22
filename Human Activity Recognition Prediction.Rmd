@@ -222,7 +222,7 @@ Well, `r as.integer(quizSuccessRF * 100.0)`% is pretty decent here as well.
    
 If this report was not constrained by size and time, the investigation would likely continue exploring using the random forest algorithm. We computed the variable importance during the random forest calculation; it appears that we could likely focus our (future) analysis on a handful of features instead of the entire set:
   
-```{r Variable Importance, fig.width=12, fig.align='center'}
+```{r Variable Importance, fig.width=12, fig.height=8, fig.align='center'}
 varImpPlot(rfFitAll$finalModel, main="Random Forest Variable Importance")
 ```
 
